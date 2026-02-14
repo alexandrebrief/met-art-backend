@@ -27,15 +27,16 @@ if (isProduction) {
     process.exit(1);
   }
 
-  db = new Pool({
-    connectionString,
-    ssl: {
-      rejectUnauthorized: false
-    },
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000
-  });
+db = new Pool({
+  connectionString,
+  ssl: {
+    rejectUnauthorized: false // ← Changez ceci à false pour accepter le certificat auto-signé
+  },
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000
+});
+
 
   console.log('✅ [db.js] Pool PostgreSQL créé');
 
