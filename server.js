@@ -14,7 +14,7 @@ const app = express();
 // Configuration CORS
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
-    ? ['https://votre-frontend.vercel.app'] // À remplacer par votre URL Vercel
+    ? ['https://met-art-frontend.vercel.app'] // ← Remplace par TON URL Vercel
     : 'http://localhost:5173',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
