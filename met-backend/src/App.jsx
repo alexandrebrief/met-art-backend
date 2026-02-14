@@ -68,7 +68,7 @@ function AppContent() {
     setLoading(page === 1);
     setLoadingMore(page > 1);
     try {
-      const res = await fetch(`http://localhost:3000/api/artworks?page=${page}&limit=${pagination.limit}`);
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/artworks?page=${page}&limit=${pagination.limit}`);
       const data = await res.json();
       
       if (page === 1) {
@@ -96,7 +96,7 @@ function AppContent() {
     setLoading(page === 1);
     setLoadingMore(page > 1);
     try {
-      const res = await fetchWithAuth(`http://localhost:3000/api/favorites?page=${page}&limit=${pagination.limit}`);
+      const res = await fetchWithAuth(`${import.meta.env.VITE_API_URL}/api/favorites?page=${page}&limit=${pagination.limit}`);
       const data = await res.json();
       
       if (page === 1) {
@@ -125,7 +125,7 @@ function AppContent() {
     setLoading(page === 1);
     setLoadingMore(page > 1);
     try {
-      const res = await fetchWithAuth(`http://localhost:3000/api/user/rated-artworks?page=${page}&limit=${pagination.limit}`);
+      const res = await fetchWithAuth(`${import.meta.env.VITE_API_URL}/api/user/rated-artworks?page=${page}&limit=${pagination.limit}`);
       const data = await res.json();
       
       if (page === 1) {
@@ -165,7 +165,7 @@ function AppContent() {
   const loadRating = async (artworkId) => {
     if (!isAuthenticated) return;
     try {
-      const res = await fetchWithAuth(`http://localhost:3000/api/ratings/${artworkId}`);
+      const res = await fetchWithAuth(`${import.meta.env.VITE_API_URL}/api/ratings/${artworkId}`);
       const data = await res.json();
       setRatings(prev => ({
         ...prev,
@@ -186,7 +186,7 @@ const saveRating = async (artworkId, ratingData) => {
   try {
     console.log('Sauvegarde de la note:', { artworkId, ratingData });
     
-    const res = await fetchWithAuth(`http://localhost:3000/api/ratings/${artworkId}`, {
+    const res = await fetchWithAuth(`${import.meta.env.VITE_API_URL}/api/ratings/${artworkId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -236,7 +236,7 @@ const saveRating = async (artworkId, ratingData) => {
       const isFav = favorites.some(f => f.id === artwork.id);
       
       if (isFav) {
-        const res = await fetchWithAuth(`http://localhost:3000/api/favorites/${artwork.id}`, {
+        const res = await fetchWithAuth(`${import.meta.env.VITE_API_URL}/api/favorites/${artwork.id}`, {
           method: 'DELETE'
         });
         
@@ -244,7 +244,7 @@ const saveRating = async (artworkId, ratingData) => {
           setFavorites(prev => prev.filter(a => a.id !== artwork.id));
         }
       } else {
-        const res = await fetchWithAuth(`http://localhost:3000/api/favorites/${artwork.id}`, {
+        const res = await fetchWithAuth(`${import.meta.env.VITE_API_URL}/api/favorites/${artwork.id}`, {
           method: 'POST'
         });
         
@@ -267,7 +267,7 @@ const saveRating = async (artworkId, ratingData) => {
     setLoadingMore(page > 1);
     try {
       const res = await fetch(
-        `http://localhost:3000/api/artworks/search/local?q=${encodeURIComponent(query)}&page=${page}&limit=${pagination.limit}`
+        `${import.meta.env.VITE_API_URL}/api/artworks/search/local?q=${encodeURIComponent(query)}&page=${page}&limit=${pagination.limit}`
       );
       const data = await res.json();
       
@@ -298,7 +298,7 @@ const saveRating = async (artworkId, ratingData) => {
     setLoading(page === 1);
     setLoadingMore(page > 1);
     try {
-      const url = `http://localhost:3000/api/artworks/search/met/filtered?q=${encodeURIComponent(query)}&filterBy=${metFilter}&page=${page}&limit=${pagination.limit}`;
+      const url = `${import.meta.env.VITE_API_URL}/api/artworks/search/met/filtered?q=${encodeURIComponent(query)}&filterBy=${metFilter}&page=${page}&limit=${pagination.limit}`;
       
       const res = await fetch(url);
       const data = await res.json();
@@ -355,7 +355,7 @@ const openModal = async (artwork) => {
   if (isAuthenticated) {
     try {
       console.log('Chargement de la note pour:', artwork.id);
-      const res = await fetchWithAuth(`http://localhost:3000/api/ratings/${artwork.id}`);
+      const res = await fetchWithAuth(`${import.meta.env.VITE_API_URL}/api/ratings/${artwork.id}`);
       
       if (res.ok) {
         const data = await res.json();

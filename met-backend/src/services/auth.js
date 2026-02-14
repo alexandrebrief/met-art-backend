@@ -1,5 +1,16 @@
 // src/services/auth.js
-const API_URL = 'http://localhost:3000/api';
+
+// Définir l'URL de base selon l'environnement
+const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+const API_BASE_URL = isDevelopment 
+  ? 'http://localhost:3000' 
+  : (import.meta.env.VITE_API_URL || 'https://met-art-backend.onrender.com');
+
+const API_URL = `${API_BASE_URL}/api`;
+
+console.log('🔧 Environnement:', isDevelopment ? 'DEVELOPPEMENT' : 'PRODUCTION');
+console.log('🔧 API_BASE_URL =', API_BASE_URL);
 
 // Stocker le token
 export const setToken = (token) => {
@@ -31,6 +42,8 @@ export const isAuthenticated = () => {
 
 // Inscription
 export const register = async (username, email, password) => {
+  console.log('📝 Tentative inscription à:', `${API_URL}/auth/register`);
+  
   const response = await fetch(`${API_URL}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -50,6 +63,8 @@ export const register = async (username, email, password) => {
 
 // Connexion
 export const login = async (email, password) => {
+  console.log('🔐 Tentative connexion à:', `${API_URL}/auth/login`);
+  
   const response = await fetch(`${API_URL}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
