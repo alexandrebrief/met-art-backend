@@ -48,19 +48,22 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-// ==================== RECHERCHE AVEC PAGINATION (20 par page) ====================
+
+
+
+// ==================== RECHERCHE SANS FILTRE ====================
 app.get('/api/search', async (req, res) => {
   try {
     const { q, page = 1 } = req.query;
-    const limit = 20;
-    const offset = (page - 1) * limit;
+    const limit = 20; // 20 affichées par page
     
     if (!q || q.trim() === '') return res.json({ artworks: [], pagination: {} });
 
     const searchTerm = q.trim().toLowerCase();
     const searchPattern = `%${searchTerm}%`;
+    const offset = (page - 1) * limit;
     
-    // 1. RECHERCHE LOCALE
+    // 1. RECHERCHE LOCALE (inchangée)
     let localArtworks = [];
     let localTotal = 0;
     
@@ -104,7 +107,7 @@ app.get('/api/search', async (req, res) => {
       ).all(searchPattern, searchPattern, searchPattern, searchPattern, limit, offset);
     }
 
-    // 2. APPEL À L'API MET
+    // 2. APPEL À L'API MET - SANS FILTRE
     let metTotal = 0;
     let metArtworks = [];
     
@@ -116,6 +119,7 @@ app.get('/api/search', async (req, res) => {
       metTotal = searchData.total || 0;
       
       if (searchData.objectIDs && searchData.objectIDs.length > 0) {
+        // Prendre les IDs pour cette page
         const metIdsForPage = searchData.objectIDs.slice(offset, offset + limit);
         
         if (metIdsForPage.length > 0) {
@@ -130,24 +134,21 @@ app.get('/api/search', async (req, res) => {
           for (const data of details) {
             if (!data || !data.objectID) continue;
             
-            const titleMatch = data.title?.toLowerCase().includes(searchTerm);
-            const artistMatch = data.artistDisplayName?.toLowerCase().includes(searchTerm);
-            
-            if (titleMatch || artistMatch) {
-              metArtworks.push({
-                id: data.objectID,
-                metID: data.objectID,
-                title: data.title || 'Titre inconnu',
-                artist: data.artistDisplayName || 'Artiste inconnu',
-                image: data.primaryImageSmall || '',
-                date: data.objectDate || null,
-                medium: data.medium || null,
-                dimensions: data.dimensions || null,
-                department: data.department || null,
-                objectURL: data.objectURL || null
-              });
-            }
+            // 🟢 PLUS DE FILTRE ! On garde TOUTES les œuvres
+            metArtworks.push({
+              id: data.objectID,
+              metID: data.objectID,
+              title: data.title || 'Titre inconnu',
+              artist: data.artistDisplayName || 'Artiste inconnu',
+              image: data.primaryImageSmall,
+              date: data.objectDate || null,
+              medium: data.medium || null,
+              dimensions: data.dimensions || null,
+              department: data.department || null,
+              objectURL: data.objectURL || null
+            });
           }
+          console.log(`📊 ${metArtworks.length} œuvres MET pour la page ${page}`);
         }
       }
     } catch (err) {
@@ -155,17 +156,18 @@ app.get('/api/search', async (req, res) => {
     }
 
     // 3. FUSION DES RÉSULTATS
-    const allArtworks = [...localArtworks];
-    for (const metArt of metArtworks) {
-      const exists = allArtworks.some(local => local.metID === metArt.metID);
-      if (!exists) allArtworks.push(metArt);
-    }
+    const allArtworks = [...localArtworks, ...metArtworks];
+    
+    // Éviter les doublons
+    const uniqueArtworks = Array.from(
+      new Map(allArtworks.map(item => [item.id, item])).values()
+    );
 
     const totalResults = localTotal + metTotal;
     const totalPages = Math.ceil(totalResults / limit);
     
     res.json({ 
-      artworks: allArtworks,
+      artworks: uniqueArtworks.slice(0, limit),
       pagination: {
         currentPage: parseInt(page),
         totalPages,
