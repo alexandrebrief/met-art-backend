@@ -64,7 +64,7 @@ app.get('/api/search', async (req, res) => {
     
     console.log(`\n🔍 RECHERCHE: "${searchTerm}" (page ${page})`);
 
-    // 1. RECHERCHE LOCALE (inchangée)
+    // 1. RECHERCHE LOCALE
     let localArtworks = [];
     let localTotal = 0;
     
@@ -133,15 +133,14 @@ app.get('/api/search', async (req, res) => {
       metTotal = searchData.total || 0;
       
       if (searchData.objectIDs && searchData.objectIDs.length > 0) {
-        // 🟢 Prendre PLUS d'IDs pour avoir assez de matches (100 au lieu de 20)
-        const idsToCheck = searchData.objectIDs.slice(0, 100);
+        const metIdsForPage = searchData.objectIDs.slice(offset, offset + limit);
         
-        console.log(`🔢 Analyse de ${idsToCheck.length} IDs pour trouver ceux avec "${searchTerm}" dans le titre`);
+        console.log(`🔢 IDs pour page ${page}: ${metIdsForPage.length} (de ${offset} à ${offset + limit})`);
         
-        if (idsToCheck.length > 0) {
-          console.log(`⏳ Récupération des détails pour ${idsToCheck.length} œuvres...`);
+        if (metIdsForPage.length > 0) {
+          console.log(`⏳ Récupération des détails pour ${metIdsForPage.length} œuvres...`);
           
-          const detailPromises = idsToCheck.map(id => 
+          const detailPromises = metIdsForPage.map(id => 
             fetch(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`)
               .then(res => res.json())
               .catch((err) => {
@@ -153,18 +152,19 @@ app.get('/api/search', async (req, res) => {
           const details = await Promise.all(detailPromises);
           
           const valides = details.filter(d => d && d.objectID).length;
-          console.log(`✅ ${valides} détails valides sur ${idsToCheck.length}`);
+          console.log(`✅ ${valides} détails valides sur ${metIdsForPage.length}`);
           
           let gardees = 0;
           for (const data of details) {
             if (!data || !data.objectID) continue;
             
-            // 🟢 FILTRE UNIQUEMENT SUR LE TITRE
             const titleMatch = data.title?.toLowerCase().includes(searchTerm);
+            const artistMatch = data.artistDisplayName?.toLowerCase().includes(searchTerm);
             
-            if (titleMatch) {
+            if (titleMatch || artistMatch) {
               gardees++;
-              console.log(`✨ Œuvre gardée: "${data.title}"`);
+              console.log(`✨ Œuvre gardée: "${data.title}" par ${data.artistDisplayName || 'inconnu'}`);
+              console.log(`   - Title match: ${titleMatch}, Artist match: ${artistMatch}`);
               
               metArtworks.push({
                 id: data.objectID,
@@ -179,10 +179,10 @@ app.get('/api/search', async (req, res) => {
                 objectURL: data.objectURL || null
               });
             } else {
-              console.log(`❌ Œuvre filtrée: "${data.title}" (ne contient pas "${searchTerm}" dans le titre)`);
+              console.log(`❌ Œuvre filtrée: "${data.title}" (ne contient pas "${searchTerm}" dans titre ou artiste)`);
             }
           }
-          console.log(`🎯 ${gardees} œuvres MET gardées avec "${searchTerm}" dans le titre`);
+          console.log(`🎯 ${gardees} œuvres MET gardées pour cette page`);
         }
       } else {
         console.log('⚠️ Aucun ID trouvé dans la réponse MET');
@@ -203,19 +203,14 @@ app.get('/api/search', async (req, res) => {
       }
     }
 
-    // 🟢 PAGINATION : on prend les 20 premières œuvres de la page demandée
-    const startIdx = offset;
-    const endIdx = startIdx + limit;
-    const paginatedArtworks = allArtworks.slice(startIdx, endIdx);
-
     const totalResults = localTotal + metTotal;
     const totalPages = Math.ceil(totalResults / limit);
     
-    console.log(`📊 RÉSULTAT FINAL - Page ${page}: ${paginatedArtworks.length} œuvres affichées (${localArtworks.length} locales + ${metArtworks.length} MET, ${doublons} doublons évités)`);
+    console.log(`📊 RÉSULTAT FINAL - Page ${page}: ${allArtworks.length} œuvres affichées (${localArtworks.length} locales + ${metArtworks.length} MET, ${doublons} doublons évités)`);
     console.log(`   Total global: ${totalResults} œuvres, ${totalPages} pages\n`);
     
     res.json({ 
-      artworks: paginatedArtworks,
+      artworks: allArtworks,
       pagination: {
         currentPage: parseInt(page),
         totalPages,
@@ -231,8 +226,6 @@ app.get('/api/search', async (req, res) => {
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
-
-
 
 
 // ==================== AUTH ====================
