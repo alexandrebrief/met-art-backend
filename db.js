@@ -27,16 +27,15 @@ if (isProduction) {
     process.exit(1);
   }
 
-db = new Pool({
-  connectionString,
-  ssl: {
-    rejectUnauthorized: false // ← Changez ceci à false pour accepter le certificat auto-signé
-  },
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000
-});
-
+  db = new Pool({
+    connectionString,
+    ssl: {
+      rejectUnauthorized: false
+    },
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000
+  });
 
   console.log('✅ [db.js] Pool PostgreSQL créé');
 
@@ -138,6 +137,7 @@ db = new Pool({
       await db.query(`CREATE INDEX IF NOT EXISTS idx_artworks_metid ON artworks("metID")`);
       await db.query(`CREATE INDEX IF NOT EXISTS idx_artworks_title ON artworks(title)`);
       await db.query(`CREATE INDEX IF NOT EXISTS idx_artworks_artist ON artworks(artist)`);
+      await db.query(`CREATE INDEX IF NOT EXISTS idx_artworks_department ON artworks(department)`);
       
       console.log('✅ [db.js] Tables PostgreSQL créées/vérifiées');
     } catch (err) {
@@ -147,7 +147,7 @@ db = new Pool({
 
   initPostgres();
 
-  // Wrapper pour garder la même interface
+  // Wrapper pour garder la même interface (async)
   db.prepare = (sql) => {
     return {
       get: async (...params) => {

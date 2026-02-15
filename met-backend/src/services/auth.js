@@ -1,16 +1,10 @@
 // src/services/auth.js
 
-// Définir l'URL de base selon l'environnement
-const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
-const API_BASE_URL = isDevelopment 
-  ? 'http://localhost:3000' 
-  : (import.meta.env.VITE_API_URL || 'https://met-art-backend.onrender.com');
-
+// Récupérer l'URL de base depuis l'environnement
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const API_URL = `${API_BASE_URL}/api`;
 
-console.log('🔧 Environnement:', isDevelopment ? 'DEVELOPPEMENT' : 'PRODUCTION');
-console.log('🔧 API_BASE_URL =', API_BASE_URL);
+console.log('🔧 API_URL =', API_URL);
 
 // Stocker le token
 export const setToken = (token) => {
@@ -50,12 +44,12 @@ export const register = async (username, email, password) => {
     body: JSON.stringify({ username, email, password })
   });
   
+  const data = await response.json();
+  
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Erreur lors de l\'inscription');
+    throw new Error(data.error || 'Erreur lors de l\'inscription');
   }
   
-  const data = await response.json();
   setToken(data.token);
   setUser(data.user);
   return data;
@@ -71,12 +65,12 @@ export const login = async (email, password) => {
     body: JSON.stringify({ email, password })
   });
   
+  const data = await response.json();
+  
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Erreur lors de la connexion');
+    throw new Error(data.error || 'Erreur lors de la connexion');
   }
   
-  const data = await response.json();
   setToken(data.token);
   setUser(data.user);
   return data;
@@ -87,28 +81,11 @@ export const logout = () => {
   removeToken();
 };
 
-// Récupérer l'utilisateur connecté
-export const getCurrentUser = async () => {
-  const token = getToken();
-  if (!token) return null;
-
-  const response = await fetch(`${API_URL}/auth/me`, {
-    headers: { 'Authorization': `Bearer ${token}` }
-  });
-  
-  if (!response.ok) {
-    removeToken();
-    return null;
-  }
-  
-  return response.json();
-};
-
 // Helper pour les fetch avec token
 export const fetchWithAuth = async (url, options = {}) => {
   const token = getToken();
   
-  return fetch(url, {
+  const response = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -116,4 +93,13 @@ export const fetchWithAuth = async (url, options = {}) => {
       ...options.headers
     }
   });
+  
+  if (response.status === 401) {
+    // Token expiré ou invalide
+    removeToken();
+    window.location.reload();
+    throw new Error('Session expirée');
+  }
+  
+  return response;
 };
