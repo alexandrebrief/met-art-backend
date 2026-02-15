@@ -48,8 +48,7 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-
-// ==================== RECHERCHE HYBRIDE INTELLIGENTE ====================
+// ==================== RECHERCHE OPTIMALE ====================
 app.get('/api/search', async (req, res) => {
   try {
     const { q, page = 1 } = req.query;
@@ -60,79 +59,69 @@ app.get('/api/search', async (req, res) => {
 
     const searchTerm = q.trim().toLowerCase();
     
-    // 1. RECHERCHE DANS L'API MET (on récupère BEAUCOUP d'IDs)
-    let metTotal = 0;
-    let allMetArtworks = [];
+    // 1. Récupérer TOUS les IDs de l'API MET
+    const searchUrl = `https://collectionapi.metmuseum.org/public/collection/v1/search?q=${encodeURIComponent(searchTerm)}&hasImages=true`;
+    const searchResponse = await fetch(searchUrl);
+    const searchData = await searchResponse.json();
     
-    try {
-      const searchUrl = `https://collectionapi.metmuseum.org/public/collection/v1/search?q=${encodeURIComponent(searchTerm)}&hasImages=true`;
-      const searchResponse = await fetch(searchUrl);
-      const searchData = await searchResponse.json();
+    const allIds = searchData.objectIDs || [];
+    console.log(`📊 Total IDs trouvés: ${allIds.length}`);
+
+    // 2. Récupérer les DÉTAILS de TOUS les IDs (mais par lots pour ne pas surcharger)
+    // On va traiter les IDs par paquets de 50
+    const batchSize = 50;
+    const relevantArtworks = [];
+    
+    for (let i = 0; i < allIds.length; i += batchSize) {
+      const batchIds = allIds.slice(i, i + batchSize);
+      console.log(`🔍 Traitement du lot ${i/batchSize + 1} (IDs ${i} à ${i + batchIds.length})`);
       
-      metTotal = searchData.total || 0;
-      
-      if (searchData.objectIDs && searchData.objectIDs.length > 0) {
-        // Prendre PLUS d'IDs pour avoir assez de matches après filtrage
-        const idsToFetch = searchData.objectIDs.slice(0, 100); // 100 IDs analysés
-        
-        const detailPromises = idsToFetch.map(id => 
+      // Récupérer les détails du lot en parallèle
+      const batchDetails = await Promise.all(
+        batchIds.map(id => 
           fetch(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`)
             .then(res => res.json())
             .catch(() => null)
-        );
+        )
+      );
+      
+      // Filtrer pour ne garder que ceux qui ont le mot dans le TITRE
+      for (const data of batchDetails) {
+        if (!data || !data.objectID) continue;
         
-        const details = await Promise.all(detailPromises);
-        
-        // Filtrer intelligemment
-        for (const data of details) {
-          if (!data || !data.objectID) continue;
-          
-          const titleMatch = data.title?.toLowerCase().includes(searchTerm);
-          const artistMatch = data.artistDisplayName?.toLowerCase().includes(searchTerm);
-          
-          // On garde seulement les pertinents
-          if (titleMatch || artistMatch) {
-            allMetArtworks.push({
-              id: data.objectID,
-              metID: data.objectID,
-              title: data.title || 'Titre inconnu',
-              artist: data.artistDisplayName || 'Artiste inconnu',
-              image: data.primaryImageSmall,
-              date: data.objectDate || null,
-              medium: data.medium || null,
-              dimensions: data.dimensions || null,
-              department: data.department || null,
-              objectURL: data.objectURL || null,
-              // Score de pertinence pour le tri
-              relevanceScore: (titleMatch ? 2 : 0) + (artistMatch ? 1 : 0)
-            });
-          }
+        if (data.title?.toLowerCase().includes(searchTerm)) {
+          relevantArtworks.push({
+            id: data.objectID,
+            metID: data.objectID,
+            title: data.title || 'Titre inconnu',
+            artist: data.artistDisplayName || 'Artiste inconnu',
+            image: data.primaryImageSmall,
+            date: data.objectDate || null,
+            medium: data.medium || null,
+            dimensions: data.dimensions || null,
+            department: data.department || null,
+            objectURL: data.objectURL || null
+          });
         }
-        
-        // Trier par pertinence
-        allMetArtworks.sort((a, b) => b.relevanceScore - a.relevanceScore);
       }
-    } catch (err) {
-      console.error('Erreur API MET:', err);
+      
+      // Si on a déjà assez d'œuvres pour la page, on peut s'arrêter
+      if (relevantArtworks.length >= offset + limit) break;
     }
 
-    // 2. PAGINATION des résultats pertinents
-    const paginatedArtworks = allMetArtworks.slice(offset, offset + limit);
+    console.log(`🎯 Œuvres avec "${searchTerm}" dans le titre: ${relevantArtworks.length}`);
+
+    // 3. Paginer les résultats filtrés
+    const paginatedArtworks = relevantArtworks.slice(offset, offset + limit);
     
-    // 3. Si pas assez de pertinents pour remplir la page, on complète avec d'autres
-    if (paginatedArtworks.length < limit && allMetArtworks.length < metTotal) {
-      console.log(`⚠️ Pas assez de pertinents, complément avec d'autres...`);
-      // Logique pour compléter (optionnel)
-    }
-
-    const totalPages = Math.ceil(allMetArtworks.length / limit);
+    const totalPages = Math.ceil(relevantArtworks.length / limit);
     
     res.json({ 
       artworks: paginatedArtworks,
       pagination: {
         currentPage: parseInt(page),
         totalPages,
-        totalResults: allMetArtworks.length,
+        totalResults: relevantArtworks.length,
         resultsPerPage: limit,
         hasNext: page < totalPages,
         hasPrev: page > 1
