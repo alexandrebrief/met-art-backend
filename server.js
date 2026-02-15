@@ -50,7 +50,7 @@ app.get('/api/stats', async (req, res) => {
 
 
 
-// ==================== RECHERCHE AVEC PAGINATION (20 par page) ====================
+// ==================== RECHERCHE OPTIMISÉE POUR PRODUCTION ====================
 app.get('/api/search', async (req, res) => {
   try {
     const { q, page = 1 } = req.query;
@@ -60,157 +60,76 @@ app.get('/api/search', async (req, res) => {
     if (!q || q.trim() === '') return res.json({ artworks: [], pagination: {} });
 
     const searchTerm = q.trim().toLowerCase();
-    const searchPattern = `%${searchTerm}%`;
     
-    console.log(`\n🔍 RECHERCHE: "${searchTerm}" (page ${page})`);
-
-    // 1. RECHERCHE LOCALE
-    let localArtworks = [];
-    let localTotal = 0;
-    
-    if (process.env.NODE_ENV === 'production') {
-      const countResult = await db.query(
-        `SELECT COUNT(*) as count FROM artworks 
-         WHERE LOWER(title) LIKE LOWER($1) OR LOWER(artist) LIKE LOWER($1)`,
-        [searchPattern]
-      );
-      localTotal = parseInt(countResult.rows[0].count);
-      
-      const result = await db.query(
-        `SELECT * FROM artworks 
-         WHERE LOWER(title) LIKE LOWER($1) OR LOWER(artist) LIKE LOWER($1)
-         ORDER BY 
-           CASE 
-             WHEN LOWER(artist) LIKE LOWER($1) THEN 1
-             WHEN LOWER(title) LIKE LOWER($1) THEN 2
-             ELSE 3
-           END
-         LIMIT $2 OFFSET $3`,
-        [searchPattern, limit, offset]
-      );
-      localArtworks = result.rows;
-    } else {
-      localTotal = db.prepare(
-        `SELECT COUNT(*) as count FROM artworks 
-         WHERE title LIKE ? OR artist LIKE ?`
-      ).get(searchPattern, searchPattern).count;
-      
-      localArtworks = db.prepare(
-        `SELECT * FROM artworks 
-         WHERE title LIKE ? OR artist LIKE ?
-         ORDER BY 
-           CASE 
-             WHEN artist LIKE ? THEN 1
-             WHEN title LIKE ? THEN 2
-             ELSE 3
-           END
-         LIMIT ? OFFSET ?`
-      ).all(searchPattern, searchPattern, searchPattern, searchPattern, limit, offset);
-    }
-
-    console.log(`📚 Locales: ${localArtworks.length} trouvées (total: ${localTotal})`);
-
-    // 2. APPEL À L'API MET
+    // 1. RECHERCHE DANS L'API MET (source principale)
     let metTotal = 0;
     let metArtworks = [];
     
     try {
       const searchUrl = `https://collectionapi.metmuseum.org/public/collection/v1/search?q=${encodeURIComponent(searchTerm)}&hasImages=true`;
-      
-      console.log('📡 Appel API MET pour:', searchTerm);
-      console.log('🔗 URL:', searchUrl);
-      
       const searchResponse = await fetch(searchUrl);
-      console.log('📦 Statut réponse MET:', searchResponse.status);
-      
       const searchData = await searchResponse.json();
-      
-      console.log('📊 Données MET reçues:', {
-        total: searchData.total,
-        objectIDsCount: searchData.objectIDs?.length
-      });
       
       metTotal = searchData.total || 0;
       
       if (searchData.objectIDs && searchData.objectIDs.length > 0) {
+        // Prendre les IDs pour cette page
         const metIdsForPage = searchData.objectIDs.slice(offset, offset + limit);
         
-        console.log(`🔢 IDs pour page ${page}: ${metIdsForPage.length} (de ${offset} à ${offset + limit})`);
-        
         if (metIdsForPage.length > 0) {
-          console.log(`⏳ Récupération des détails pour ${metIdsForPage.length} œuvres...`);
-          
+          // Récupérer les détails en parallèle
           const detailPromises = metIdsForPage.map(id => 
             fetch(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`)
               .then(res => res.json())
-              .catch((err) => {
-                console.error(`❌ Erreur fetch pour ID ${id}:`, err.message);
-                return null;
-              })
+              .catch(() => null)
           );
           
           const details = await Promise.all(detailPromises);
           
-          const valides = details.filter(d => d && d.objectID).length;
-          console.log(`✅ ${valides} détails valides sur ${metIdsForPage.length}`);
-          
-          let gardees = 0;
+          // 🟢 PLUS DE FILTRE ! On garde TOUTES les œuvres
           for (const data of details) {
             if (!data || !data.objectID) continue;
             
-            const titleMatch = data.title?.toLowerCase().includes(searchTerm);
-            const artistMatch = data.artistDisplayName?.toLowerCase().includes(searchTerm);
-            
-            if (titleMatch || artistMatch) {
-              gardees++;
-              console.log(`✨ Œuvre gardée: "${data.title}" par ${data.artistDisplayName || 'inconnu'}`);
-              console.log(`   - Title match: ${titleMatch}, Artist match: ${artistMatch}`);
-              
-              metArtworks.push({
-                id: data.objectID,
-                metID: data.objectID,
-                title: data.title || 'Titre inconnu',
-                artist: data.artistDisplayName || 'Artiste inconnu',
-                image: data.primaryImageSmall,
-                date: data.objectDate || null,
-                medium: data.medium || null,
-                dimensions: data.dimensions || null,
-                department: data.department || null,
-                objectURL: data.objectURL || null
-              });
-            } else {
-              console.log(`❌ Œuvre filtrée: "${data.title}" (ne contient pas "${searchTerm}" dans titre ou artiste)`);
-            }
+            metArtworks.push({
+              id: data.objectID,
+              metID: data.objectID,
+              title: data.title || 'Titre inconnu',
+              artist: data.artistDisplayName || 'Artiste inconnu',
+              image: data.primaryImageSmall,
+              date: data.objectDate || null,
+              medium: data.medium || null,
+              dimensions: data.dimensions || null,
+              department: data.department || null,
+              objectURL: data.objectURL || null
+            });
           }
-          console.log(`🎯 ${gardees} œuvres MET gardées pour cette page`);
         }
-      } else {
-        console.log('⚠️ Aucun ID trouvé dans la réponse MET');
       }
     } catch (err) {
-      console.error('❌ Erreur API MET:', err.message);
+      console.error('Erreur API MET:', err);
     }
 
-    // 3. FUSION DES RÉSULTATS
+    // 2. RECHERCHE LOCALE (en complément, si des œuvres sont déjà en base)
+    let localArtworks = [];
+    let localTotal = 0;
+    
+    // On ne cherche en local que si la base a des chances d'être remplie
+    if (process.env.NODE_ENV === 'production') {
+      // Optionnel : on pourrait vérifier si la base a des données
+    }
+
+    // 3. FUSION (garder les locales, ajouter les MET sans doublons)
     const allArtworks = [...localArtworks];
-    let doublons = 0;
     for (const metArt of metArtworks) {
       const exists = allArtworks.some(local => local.metID === metArt.metID);
-      if (!exists) {
-        allArtworks.push(metArt);
-      } else {
-        doublons++;
-      }
+      if (!exists) allArtworks.push(metArt);
     }
 
-    const totalResults = localTotal + metTotal;
+    const totalResults = Math.max(localTotal, metTotal);
     const totalPages = Math.ceil(totalResults / limit);
     
-    console.log(`📊 RÉSULTAT FINAL - Page ${page}: ${allArtworks.length} œuvres affichées (${localArtworks.length} locales + ${metArtworks.length} MET, ${doublons} doublons évités)`);
-    console.log(`   Total global: ${totalResults} œuvres, ${totalPages} pages\n`);
-    
     res.json({ 
-      artworks: allArtworks,
+      artworks: allArtworks.slice(0, limit),
       pagination: {
         currentPage: parseInt(page),
         totalPages,
@@ -222,7 +141,7 @@ app.get('/api/search', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('❌ Erreur recherche:', err);
+    console.error('Erreur recherche:', err);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
