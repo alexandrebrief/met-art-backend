@@ -49,8 +49,7 @@ app.get('/api/stats', async (req, res) => {
 });
 
 
-
-// ==================== RECHERCHE OPTIMISÉE POUR PRODUCTION ====================
+// ==================== RECHERCHE HYBRIDE INTELLIGENTE ====================
 app.get('/api/search', async (req, res) => {
   try {
     const { q, page = 1 } = req.query;
@@ -61,9 +60,9 @@ app.get('/api/search', async (req, res) => {
 
     const searchTerm = q.trim().toLowerCase();
     
-    // 1. RECHERCHE DANS L'API MET (source principale)
+    // 1. RECHERCHE DANS L'API MET (on récupère BEAUCOUP d'IDs)
     let metTotal = 0;
-    let metArtworks = [];
+    let allMetArtworks = [];
     
     try {
       const searchUrl = `https://collectionapi.metmuseum.org/public/collection/v1/search?q=${encodeURIComponent(searchTerm)}&hasImages=true`;
@@ -73,24 +72,27 @@ app.get('/api/search', async (req, res) => {
       metTotal = searchData.total || 0;
       
       if (searchData.objectIDs && searchData.objectIDs.length > 0) {
-        // Prendre les IDs pour cette page
-        const metIdsForPage = searchData.objectIDs.slice(offset, offset + limit);
+        // Prendre PLUS d'IDs pour avoir assez de matches après filtrage
+        const idsToFetch = searchData.objectIDs.slice(0, 100); // 100 IDs analysés
         
-        if (metIdsForPage.length > 0) {
-          // Récupérer les détails en parallèle
-          const detailPromises = metIdsForPage.map(id => 
-            fetch(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`)
-              .then(res => res.json())
-              .catch(() => null)
-          );
+        const detailPromises = idsToFetch.map(id => 
+          fetch(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`)
+            .then(res => res.json())
+            .catch(() => null)
+        );
+        
+        const details = await Promise.all(detailPromises);
+        
+        // Filtrer intelligemment
+        for (const data of details) {
+          if (!data || !data.objectID) continue;
           
-          const details = await Promise.all(detailPromises);
+          const titleMatch = data.title?.toLowerCase().includes(searchTerm);
+          const artistMatch = data.artistDisplayName?.toLowerCase().includes(searchTerm);
           
-          // 🟢 PLUS DE FILTRE ! On garde TOUTES les œuvres
-          for (const data of details) {
-            if (!data || !data.objectID) continue;
-            
-            metArtworks.push({
+          // On garde seulement les pertinents
+          if (titleMatch || artistMatch) {
+            allMetArtworks.push({
               id: data.objectID,
               metID: data.objectID,
               title: data.title || 'Titre inconnu',
@@ -100,40 +102,37 @@ app.get('/api/search', async (req, res) => {
               medium: data.medium || null,
               dimensions: data.dimensions || null,
               department: data.department || null,
-              objectURL: data.objectURL || null
+              objectURL: data.objectURL || null,
+              // Score de pertinence pour le tri
+              relevanceScore: (titleMatch ? 2 : 0) + (artistMatch ? 1 : 0)
             });
           }
         }
+        
+        // Trier par pertinence
+        allMetArtworks.sort((a, b) => b.relevanceScore - a.relevanceScore);
       }
     } catch (err) {
       console.error('Erreur API MET:', err);
     }
 
-    // 2. RECHERCHE LOCALE (en complément, si des œuvres sont déjà en base)
-    let localArtworks = [];
-    let localTotal = 0;
+    // 2. PAGINATION des résultats pertinents
+    const paginatedArtworks = allMetArtworks.slice(offset, offset + limit);
     
-    // On ne cherche en local que si la base a des chances d'être remplie
-    if (process.env.NODE_ENV === 'production') {
-      // Optionnel : on pourrait vérifier si la base a des données
+    // 3. Si pas assez de pertinents pour remplir la page, on complète avec d'autres
+    if (paginatedArtworks.length < limit && allMetArtworks.length < metTotal) {
+      console.log(`⚠️ Pas assez de pertinents, complément avec d'autres...`);
+      // Logique pour compléter (optionnel)
     }
 
-    // 3. FUSION (garder les locales, ajouter les MET sans doublons)
-    const allArtworks = [...localArtworks];
-    for (const metArt of metArtworks) {
-      const exists = allArtworks.some(local => local.metID === metArt.metID);
-      if (!exists) allArtworks.push(metArt);
-    }
-
-    const totalResults = Math.max(localTotal, metTotal);
-    const totalPages = Math.ceil(totalResults / limit);
+    const totalPages = Math.ceil(allMetArtworks.length / limit);
     
     res.json({ 
-      artworks: allArtworks.slice(0, limit),
+      artworks: paginatedArtworks,
       pagination: {
         currentPage: parseInt(page),
         totalPages,
-        totalResults,
+        totalResults: allMetArtworks.length,
         resultsPerPage: limit,
         hasNext: page < totalPages,
         hasPrev: page > 1
