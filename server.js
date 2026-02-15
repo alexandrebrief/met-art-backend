@@ -50,18 +50,18 @@ app.get('/api/stats', async (req, res) => {
 
 
 
-
-// ==================== RECHERCHE SANS FILTRE ====================
+// ==================== RECHERCHE AVEC PAGINATION ====================
 app.get('/api/search', async (req, res) => {
   try {
     const { q, page = 1 } = req.query;
     const limit = 20; // 20 affichées par page
+    const fetchLimit = 100; // 🟢 100 IDs récupérés pour trouver assez de matches
+    const offset = (page - 1) * fetchLimit; // Page suivante = 100 IDs plus loin
     
     if (!q || q.trim() === '') return res.json({ artworks: [], pagination: {} });
 
     const searchTerm = q.trim().toLowerCase();
     const searchPattern = `%${searchTerm}%`;
-    const offset = (page - 1) * limit;
     
     // 1. RECHERCHE LOCALE (inchangée)
     let localArtworks = [];
@@ -107,7 +107,7 @@ app.get('/api/search', async (req, res) => {
       ).all(searchPattern, searchPattern, searchPattern, searchPattern, limit, offset);
     }
 
-    // 2. APPEL À L'API MET - SANS FILTRE
+    // 2. APPEL À L'API MET
     let metTotal = 0;
     let metArtworks = [];
     
@@ -119,10 +119,12 @@ app.get('/api/search', async (req, res) => {
       metTotal = searchData.total || 0;
       
       if (searchData.objectIDs && searchData.objectIDs.length > 0) {
-        // Prendre les IDs pour cette page
-        const metIdsForPage = searchData.objectIDs.slice(offset, offset + limit);
+        // 🟢 Prendre 100 IDs au lieu de 20
+        const metIdsForPage = searchData.objectIDs.slice(offset, offset + fetchLimit);
         
         if (metIdsForPage.length > 0) {
+          console.log(`🔍 Récupération de ${metIdsForPage.length} IDs pour trouver assez de matches...`);
+          
           const detailPromises = metIdsForPage.map(id => 
             fetch(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`)
               .then(res => res.json())
@@ -131,24 +133,33 @@ app.get('/api/search', async (req, res) => {
           
           const details = await Promise.all(detailPromises);
           
+          let gardees = 0;
           for (const data of details) {
             if (!data || !data.objectID) continue;
             
-            // 🟢 PLUS DE FILTRE ! On garde TOUTES les œuvres
-            metArtworks.push({
-              id: data.objectID,
-              metID: data.objectID,
-              title: data.title || 'Titre inconnu',
-              artist: data.artistDisplayName || 'Artiste inconnu',
-              image: data.primaryImageSmall,
-              date: data.objectDate || null,
-              medium: data.medium || null,
-              dimensions: data.dimensions || null,
-              department: data.department || null,
-              objectURL: data.objectURL || null
-            });
+            const titleMatch = data.title?.toLowerCase().includes(searchTerm);
+            const artistMatch = data.artistDisplayName?.toLowerCase().includes(searchTerm);
+            
+            if (titleMatch || artistMatch) {
+              gardees++;
+              metArtworks.push({
+                id: data.objectID,
+                metID: data.objectID,
+                title: data.title || 'Titre inconnu',
+                artist: data.artistDisplayName || 'Artiste inconnu',
+                image: data.primaryImageSmall,
+                date: data.objectDate || null,
+                medium: data.medium || null,
+                dimensions: data.dimensions || null,
+                department: data.department || null,
+                objectURL: data.objectURL || null
+              });
+              
+              // 🟢 Stop dès qu'on a assez d'œuvres pour la page
+              if (metArtworks.length >= limit) break;
+            }
           }
-          console.log(`📊 ${metArtworks.length} œuvres MET pour la page ${page}`);
+          console.log(`🎯 ${gardees} matches trouvés, ${metArtworks.length} gardés pour la page`);
         }
       }
     } catch (err) {
@@ -156,18 +167,17 @@ app.get('/api/search', async (req, res) => {
     }
 
     // 3. FUSION DES RÉSULTATS
-    const allArtworks = [...localArtworks, ...metArtworks];
-    
-    // Éviter les doublons
-    const uniqueArtworks = Array.from(
-      new Map(allArtworks.map(item => [item.id, item])).values()
-    );
+    const allArtworks = [...localArtworks];
+    for (const metArt of metArtworks) {
+      const exists = allArtworks.some(local => local.metID === metArt.metID);
+      if (!exists) allArtworks.push(metArt);
+    }
 
     const totalResults = localTotal + metTotal;
     const totalPages = Math.ceil(totalResults / limit);
     
     res.json({ 
-      artworks: uniqueArtworks.slice(0, limit),
+      artworks: allArtworks.slice(0, limit), // 🟢 On garantit 20 max
       pagination: {
         currentPage: parseInt(page),
         totalPages,
@@ -183,6 +193,7 @@ app.get('/api/search', async (req, res) => {
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
+
 
 // ==================== AUTH ====================
 app.post('/api/auth/register', async (req, res) => {
