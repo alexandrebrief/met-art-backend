@@ -10,8 +10,12 @@ const db = require('./db.js');
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET;
 
+// ✅ CONFIGURATION CORS CORRIGÉE (accepte localhost ET Vercel)
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: [
+    'http://localhost:5173',                // Développement local
+    'https://met-art-frontend.vercel.app'    // Production
+  ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -34,11 +38,9 @@ const authenticateToken = (req, res, next) => {
 // ==================== STATISTIQUES ====================
 app.get('/api/stats', async (req, res) => {
   try {
-    // Appel API MET pour le nombre total d'œuvres
     const metResponse = await fetch('https://collectionapi.metmuseum.org/public/collection/v1/objects');
     const metData = await metResponse.json();
     const metTotal = metData.total || 0;
-
     res.json({ metTotal });
   } catch (err) {
     console.error('Erreur stats:', err);
@@ -46,26 +48,23 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-
-
 // ==================== RECHERCHE AVEC PAGINATION (20 par page) ====================
 app.get('/api/search', async (req, res) => {
   try {
     const { q, page = 1 } = req.query;
-    const limit = 20; // 20 par page
+    const limit = 20;
     const offset = (page - 1) * limit;
     
-    if (!q || q.trim() === '') return res.json({ artworks: [], total: 0, pagination: {} });
+    if (!q || q.trim() === '') return res.json({ artworks: [], pagination: {} });
 
     const searchTerm = q.trim().toLowerCase();
     const searchPattern = `%${searchTerm}%`;
     
-    // 1. RECHERCHE LOCALE (sans limite pour compter le total)
+    // 1. RECHERCHE LOCALE
     let localArtworks = [];
     let localTotal = 0;
     
     if (process.env.NODE_ENV === 'production') {
-      // Compter le total local
       const countResult = await db.query(
         `SELECT COUNT(*) as count FROM artworks 
          WHERE LOWER(title) LIKE LOWER($1) OR LOWER(artist) LIKE LOWER($1)`,
@@ -73,7 +72,6 @@ app.get('/api/search', async (req, res) => {
       );
       localTotal = parseInt(countResult.rows[0].count);
       
-      // Récupérer les œuvres locales avec pagination
       const result = await db.query(
         `SELECT * FROM artworks 
          WHERE LOWER(title) LIKE LOWER($1) OR LOWER(artist) LIKE LOWER($1)
@@ -88,7 +86,6 @@ app.get('/api/search', async (req, res) => {
       );
       localArtworks = result.rows;
     } else {
-      // Version SQLite
       localTotal = db.prepare(
         `SELECT COUNT(*) as count FROM artworks 
          WHERE title LIKE ? OR artist LIKE ?`
@@ -107,7 +104,7 @@ app.get('/api/search', async (req, res) => {
       ).all(searchPattern, searchPattern, searchPattern, searchPattern, limit, offset);
     }
 
-    // 2. APPEL À L'API MET pour le total ET les IDs
+    // 2. APPEL À L'API MET
     let metTotal = 0;
     let metArtworks = [];
     
@@ -119,12 +116,9 @@ app.get('/api/search', async (req, res) => {
       metTotal = searchData.total || 0;
       
       if (searchData.objectIDs && searchData.objectIDs.length > 0) {
-        // Calculer combien d'IDs MET on doit prendre pour cette page
-        // On prend ceux qui correspondent à la page actuelle
         const metIdsForPage = searchData.objectIDs.slice(offset, offset + limit);
         
         if (metIdsForPage.length > 0) {
-          // Récupérer les détails en parallèle
           const detailPromises = metIdsForPage.map(id => 
             fetch(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`)
               .then(res => res.json())
@@ -133,7 +127,6 @@ app.get('/api/search', async (req, res) => {
           
           const details = await Promise.all(detailPromises);
           
-          // Filtrer intelligemment
           for (const data of details) {
             if (!data || !data.objectID) continue;
             
@@ -161,21 +154,15 @@ app.get('/api/search', async (req, res) => {
       console.error('Erreur API MET:', err);
     }
 
-    // 3. FUSION des résultats (garder les locaux, ajouter les MET sans doublons)
+    // 3. FUSION DES RÉSULTATS
     const allArtworks = [...localArtworks];
-    
     for (const metArt of metArtworks) {
       const exists = allArtworks.some(local => local.metID === metArt.metID);
-      if (!exists) {
-        allArtworks.push(metArt);
-      }
+      if (!exists) allArtworks.push(metArt);
     }
 
-    // Calculer le total pour la pagination (locaux + MET)
     const totalResults = localTotal + metTotal;
     const totalPages = Math.ceil(totalResults / limit);
-    
-    console.log(`✅ Page ${page}: ${allArtworks.length} résultats (${localArtworks.length} locaux, ${metArtworks.length} MET)`);
     
     res.json({ 
       artworks: allArtworks,
@@ -194,9 +181,6 @@ app.get('/api/search', async (req, res) => {
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
-
-
-
 
 // ==================== AUTH ====================
 app.post('/api/auth/register', async (req, res) => {
@@ -285,6 +269,45 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ token, user });
   } catch (err) {
     console.error('Erreur connexion:', err);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user.id;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Tous les champs sont requis' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: '8 caractères minimum' });
+    }
+
+    let user;
+    if (process.env.NODE_ENV === 'production') {
+      const result = await db.query('SELECT * FROM users WHERE id = $1', [userId]);
+      user = result.rows[0];
+    } else {
+      user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    }
+
+    const validPassword = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!validPassword) return res.status(401).json({ error: 'Mot de passe actuel incorrect' });
+
+    const saltRounds = 10;
+    const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
+
+    if (process.env.NODE_ENV === 'production') {
+      await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newPasswordHash, userId]);
+    } else {
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newPasswordHash, userId);
+    }
+
+    res.json({ success: true, message: 'Mot de passe modifié avec succès' });
+  } catch (err) {
+    console.error('Erreur changement mot de passe:', err);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -531,64 +554,8 @@ app.get('/api/artworks/by-department/:department', async (req, res) => {
   }
 });
 
-// ==================== CHANGER LE MOT DE PASSE ====================
-app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-    const userId = req.user.id;
-
-    // Validation
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ error: 'Tous les champs sont requis' });
-    }
-
-    if (newPassword.length < 8) {
-      return res.status(400).json({ error: 'Le mot de passe doit contenir au moins 8 caractères' });
-    }
-
-    // Récupérer l'utilisateur
-    let user;
-    if (process.env.NODE_ENV === 'production') {
-      const result = await db.query('SELECT * FROM users WHERE id = $1', [userId]);
-      user = result.rows[0];
-    } else {
-      user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-    }
-
-    if (!user) {
-      return res.status(404).json({ error: 'Utilisateur non trouvé' });
-    }
-
-    // Vérifier l'ancien mot de passe
-    const validPassword = await bcrypt.compare(currentPassword, user.password_hash);
-    if (!validPassword) {
-      return res.status(401).json({ error: 'Mot de passe actuel incorrect' });
-    }
-
-    // Hacher le nouveau mot de passe
-    const saltRounds = 10;
-    const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
-
-    // Mettre à jour
-    if (process.env.NODE_ENV === 'production') {
-      await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newPasswordHash, userId]);
-    } else {
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newPasswordHash, userId);
-    }
-
-    res.json({ success: true, message: 'Mot de passe modifié avec succès' });
-
-  } catch (err) {
-    console.error('Erreur changement mot de passe:', err);
-    res.status(500).json({ error: 'Erreur serveur' });
-  }
-});
-
-
-
-
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🚀 Serveur démarré sur http://localhost:${PORT}`);
+  console.log(`🌍 Environnement: ${process.env.NODE_ENV || 'development'}`);
 });
